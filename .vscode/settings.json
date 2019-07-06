@@ -1,0 +1,8 @@
+{
+    "files.associations": {
+        "text.h": "c",
+        "types.h": "c",
+        "text-motions.h": "c",
+        "stdlib.h": "c"
+    }
+}
