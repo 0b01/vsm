@@ -1,8 +1,9 @@
 #define MAX_WIDTH 1024
 #define MAX_HEIGHT 1024
 #include <termios.h>
+#include <ncurses.h>
 
-typedef uint8_t CellAttr;
+typedef long CellAttr;
 
 // typedef struct {
 // 	uint8_t r, g, b;
@@ -26,11 +27,18 @@ typedef struct {
 	CellStyle style;    /* colors and attributes used to display this cell */
 } Cell;
 
+typedef struct View {
+	Text* text;
+	size_t off_y;
+} View;
+
 typedef struct Vsm {
 	int height;
 	int width;
     char info[MAX_WIDTH];
 	struct termios orig_termios;
+
+	View view;
 
 	size_t styles_size;
 	CellStyle *styles;

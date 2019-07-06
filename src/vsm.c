@@ -8,6 +8,7 @@
 #include <stdbool.h>
 #include <limits.h>
 #include <stdio.h>
+#include <uchar.h>
 #include <string.h>
 #include <stdlib.h>
 #include <sys/ioctl.h>
@@ -171,13 +172,12 @@ static void ui_blit() {
 }
 
 static void ui_draw() {
-	// ui_arrange(vsm, vsm.layout);
 	if (vsm.info[0])
 		ui_draw_string(0, vsm.height-1, vsm.info, UI_STYLE_INFO);
 	ui_blit();
 }
 
-void ui_info(const char *msg, ...) {
+void vsm_info(const char *msg, ...) {
 	ui_draw_line(0, vsm.height-1, ' ', UI_STYLE_INFO);
 	va_list args;
 	va_start(args, msg);
@@ -187,7 +187,7 @@ void ui_info(const char *msg, ...) {
 
 void vsm_init() {
 	size_t styles_size = UI_STYLE_MAX * sizeof(CellStyle);
-	CellStyle* styles = calloc(1, styles_size);
+	CellStyle* styles = malloc(styles_size);
 	for (int i = 0; i < UI_STYLE_MAX; i++) {
 		styles[i] = (CellStyle) {
 			.fg = CELL_COLOR_DEFAULT,
@@ -203,10 +203,64 @@ void vsm_init() {
 	styles[UI_STYLE_STATUS_FOCUSED].attr |= CELL_ATTR_REVERSE|CELL_ATTR_BOLD;
 	styles[UI_STYLE_INFO].attr |= CELL_ATTR_BOLD;
 	vsm.styles = styles;
+
+	vsm.view.text = text_load("src/vsm.c");
+	vsm.view.off_y = 1;
 }
 
 void ui_exit() {
 	endwin();
+}
+
+void vsm_draw() {
+	size_t pos = text_pos_by_lineno(vsm.view.text, vsm.view.off_y);
+	/* read a screenful of text considering each character as 4-byte UTF character*/
+	const size_t size = vsm.width * vsm.height * 4;
+	/* current buffer to work with */
+	char text[size+1];
+	/* remaining bytes to process in buffer */
+	size_t rem = text_bytes_get(vsm.view.text, pos, size, text);
+	/* NUL terminate text section */
+	text[rem] = '\0';
+
+	char* hd = text;
+
+	int x = 0;
+	int y = 0;
+
+	Cell (*cells)[vsm.width] = (void*)vsm.cells;
+	const size_t cell_size = sizeof(cells[0][0].data)-1;
+	CellStyle style = vsm.styles[UI_STYLE_LEXER_MAX];
+	for (const char *next = hd; *hd && x < vsm.width && y < vsm.height - 1; hd = next) {
+		do next++; while (!ISUTF8(*next));
+		size_t len = next - hd;
+		if (!len)
+			break;
+		len = MIN(len, cell_size);
+		strncpy(cells[y][x].data, hd, len);
+		cells[y][x].data[len] = '\0';
+
+		cells[y][x].style = style;
+		x++;
+		if (*hd == '\n') {
+			y++;
+			x=0;
+		}
+		if (*hd == '\t') {
+			strncpy(cells[y][x].data, hd, len);
+			cells[y][x].data[len] = '\0';
+			cells[y][x++].style = style;
+			cells[y][x].data[len] = '\0';
+			cells[y][x++].style = style;
+			cells[y][x].data[len] = '\0';
+			cells[y][x++].style = style;
+		}
+	}
+
+}
+
+void ui_clear() {
+	erase();
 }
 
 
@@ -214,8 +268,23 @@ int main() {
 	vsm_init();
 	ui_init();
 	ui_resize();
-	ui_info("example");
-	ui_draw();
-	getch();
+
+	char ch;
+	for(;;) {
+		ui_clear();
+		memset(vsm.cells, 0, vsm.cells_size);
+		vsm_info("example %d", vsm.view.off_y);
+		vsm_draw();
+		ui_draw();
+		ch = getch();
+		if (ch == 'j') {
+			vsm.view.off_y++;
+		} else if (ch == 'k') {
+			vsm.view.off_y--;
+		} else if (ch == 'q') {
+			break;
+		}
+	}
+
 	ui_exit();
 }
