@@ -15,6 +15,7 @@
 #include <unistd.h>
 
 #include "text.h"
+#include "text-motions.h"
 #include "vsm.h"
 #include "util.h"
 
@@ -206,20 +207,60 @@ void vsm_init() {
 
 	vsm.view.text = text_load("src/vsm.c");
 	vsm.view.off_y = 1;
+	vsm.view.pos = 0;
+	vsm.view.tabwidth = 4;
 }
 
 void ui_exit() {
 	endwin();
 }
 
+// bool view_coord_get(View *view, size_t pos, Line **retline, int *retrow, int *retcol) {
+// 	int row = 0, col = 0;
+// 	size_t cur = view->start;
+// 	Line *line = view->topline;
+
+// 	if (pos < view->start || pos > view->end) {
+// 		if (retline) *retline = NULL;
+// 		if (retrow) *retrow = -1;
+// 		if (retcol) *retcol = -1;
+// 		return false;
+// 	}
+
+// 	while (line && line != view->lastline && cur < pos) {
+// 		if (cur + line->len > pos)
+// 			break;
+// 		cur += line->len;
+// 		line = line->next;
+// 		row++;
+// 	}
+
+// 	if (line) {
+// 		int max_col = MIN(view->width, line->width);
+// 		while (cur < pos && col < max_col) {
+// 			cur += line->cells[col].len;
+// 			/* skip over columns occupied by the same character */
+// 			while (++col < max_col && line->cells[col].len == 0);
+// 		}
+// 	} else {
+// 		line = view->bottomline;
+// 		row = view->height - 1;
+// 	}
+
+// 	if (retline) *retline = line;
+// 	if (retrow) *retrow = row;
+// 	if (retcol) *retcol = col;
+// 	return true;
+// }
+
 void vsm_draw() {
-	size_t pos = text_pos_by_lineno(vsm.view.text, vsm.view.off_y);
+	size_t linepos = text_pos_by_lineno(vsm.view.text, vsm.view.off_y);
 	/* read a screenful of text considering each character as 4-byte UTF character*/
 	const size_t size = vsm.width * vsm.height * 4;
 	/* current buffer to work with */
 	char text[size+1];
 	/* remaining bytes to process in buffer */
-	size_t rem = text_bytes_get(vsm.view.text, pos, size, text);
+	size_t rem = text_bytes_get(vsm.view.text, linepos, size, text);
 	/* NUL terminate text section */
 	text[rem] = '\0';
 
@@ -230,37 +271,105 @@ void vsm_draw() {
 
 	Cell (*cells)[vsm.width] = (void*)vsm.cells;
 	const size_t cell_size = sizeof(cells[0][0].data)-1;
-	CellStyle style = vsm.styles[UI_STYLE_LEXER_MAX];
-	for (const char *next = hd; *hd && x < vsm.width && y < vsm.height - 1; hd = next) {
+	for (const char *next = hd; *hd && x < vsm.width && y < vsm.height - 1; hd = next, linepos++) {
+		CellStyle style = vsm.styles[UI_STYLE_LEXER_MAX];
+		if (linepos == vsm.view.pos) {
+			style = vsm.styles[UI_STYLE_CURSOR];
+		}
 		do next++; while (!ISUTF8(*next));
 		size_t len = next - hd;
 		if (!len)
 			break;
 		len = MIN(len, cell_size);
-		strncpy(cells[y][x].data, hd, len);
-		cells[y][x].data[len] = '\0';
-
-		cells[y][x].style = style;
-		x++;
 		if (*hd == '\n') {
-			y++;
-			x=0;
-		}
-		if (*hd == '\t') {
+			// draw a space
+			strncpy(cells[y][x].data, " ", len);
+			cells[y][x].style = style;
+			x++;
+			// then draw newline
 			strncpy(cells[y][x].data, hd, len);
 			cells[y][x].data[len] = '\0';
-			cells[y][x++].style = style;
-			cells[y][x].data[len] = '\0';
-			cells[y][x++].style = style;
-			cells[y][x].data[len] = '\0';
-			cells[y][x++].style = style;
+			cells[y][x].style = style;
+			y++;
+			x=0;
+			continue;
 		}
+		if (*hd == '\t') {
+			int width = vsm.view.tabwidth - (x % vsm.view.tabwidth);
+			for (int i = 0; i < width; i++) {
+				strncpy(cells[y][x].data, hd, len);
+				cells[y][x++].style = style;
+			}
+			continue;
+		}
+
+		strncpy(cells[y][x].data, hd, len);
+		cells[y][x].data[len] = '\0';
+		cells[y][x].style = style;
+		x++;
 	}
 
+	// size_t pos = text_mark_get(vsm.view.text, vsm.view.pos);
+	// if (!view_coord_get(view, pos, &s->line, &s->row, &s->col) &&
+	// 	s == view->selection) {
+	// 	s->line = view->topline;
+	// 	s->row = 0;
+	// 	s->col = 0;
+	// }
 }
 
 void ui_clear() {
 	erase();
+}
+
+void view_line_down(View *view) {
+	int width = text_line_width_get(view->text, view->pos) + 1;
+	size_t next = text_line_next(view->text, view->pos);
+	view->pos = text_line_width_set(view->text, next, width);
+}
+void view_line_up(View *view) {
+	int width = text_line_width_get(view->text, view->pos) + 1;
+	size_t prev = text_line_prev(view->text, view->pos);
+	view->pos = text_line_width_set(view->text, prev, width);
+}
+void view_char_prev(View *view) {
+	view->pos = text_char_prev(view->text, view->pos);
+}
+void view_char_next(View *view) {
+	view->pos = text_char_next(view->text, view->pos);
+}
+void view_longword_end_next(View *view) {
+	view->pos = text_customword_end_next(view->text, view->pos, isspace);
+}
+void view_e(View* view) {
+	view->pos = text_customword_end_next(view->text, view->pos, is_word_boundary);
+}
+void view_E(View* view) {
+	view->pos = text_customword_end_next(view->text, view->pos, isspace);
+}
+void view_b(View* view) {
+	view->pos = text_customword_start_prev(view->text, view->pos, is_word_boundary);
+}
+void view_B(View* view) {
+	view->pos = text_customword_start_prev(view->text, view->pos, isspace);
+}
+void view_w(View* view) {
+	view->pos = text_customword_start_next(view->text, view->pos, is_word_boundary);
+}
+void view_W(View* view) {
+	view->pos = text_customword_start_next(view->text, view->pos, isspace);
+}
+void view_line_begin(View* view) {
+	view->pos = text_line_begin(view->text, view->pos);
+}
+void view_line_end(View* view) {
+	view->pos = text_line_end(view->text, view->pos);
+}
+void view_para_prev(View* view) {
+	view->pos = text_paragraph_prev(view->text, view->pos);
+}
+void view_para_next(View* view) {
+	view->pos = text_paragraph_next(view->text, view->pos);
 }
 
 
@@ -277,14 +386,53 @@ int main() {
 		vsm_draw();
 		ui_draw();
 		ch = getch();
-		if (ch == 'j') {
-			vsm.view.off_y++;
-		} else if (ch == 'k') {
-			vsm.view.off_y--;
-		} else if (ch == 'q') {
-			break;
+		switch (ch) {
+			case 'j':
+				view_line_down(&vsm.view);
+				break;
+			case 'k':
+				view_line_up(&vsm.view);
+				break;
+			case 'h':
+				view_char_prev(&vsm.view);
+				break;
+			case 'l':
+				view_char_next(&vsm.view);
+				break;
+			case 'e':
+				view_e(&vsm.view);
+				break;
+			case 'E':
+				view_E(&vsm.view);
+				break;
+			case 'b':
+				view_b(&vsm.view);
+				break;
+			case 'B':
+				view_B(&vsm.view);
+				break;
+			case 'w':
+				view_w(&vsm.view);
+				break;
+			case 'W':
+				view_W(&vsm.view);
+				break;
+			case '0':
+				view_line_begin(&vsm.view);
+				break;
+			case '$':
+				view_line_end(&vsm.view);
+				break;
+			case '{':
+				view_para_prev(&vsm.view);
+				break;
+			case '}':
+				view_para_next(&vsm.view);
+				break;
+			case 'q':
+				goto exit;
 		}
 	}
-
+exit:
 	ui_exit();
 }

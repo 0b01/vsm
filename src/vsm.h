@@ -30,6 +30,9 @@ typedef struct {
 typedef struct View {
 	Text* text;
 	size_t off_y;
+	size_t pos;         /* cursor position in text */
+	size_t tabwidth;
+	size_t col;
 } View;
 
 typedef struct Vsm {
